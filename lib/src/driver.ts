@@ -1,18 +1,13 @@
 import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import yaml from 'yaml';
 import { readTask } from './readTask.js';
 import { commitSubjects, createBranch, currentBranch } from './git.js';
 import { detectRedGreen } from './tdd.js';
 import { invokeCli } from './invokeClaudeCode.js';
 import { runGates } from './runGates.js';
-import {
-  formatGate,
-  lintGate,
-  typecheckGate,
-  testGate,
-  coverageGate,
-  securityGate,
-  commitMsgGate,
-} from './gates/index.js';
+import * as nodeGates from './gates/index.js';
+import { commitMsgGate } from './gates/commitMsg.js';
 import { openPr } from './openPr.js';
 import { writeJournal, writeResult } from './writeResult.js';
 
@@ -52,6 +47,19 @@ export async function main(): Promise<number> {
     journal.push(line);
     console.log(line);
   };
+
+  const cfgRaw = await readFile(join(workspace, '.arandano', 'config.yaml'), 'utf8').catch(
+    () => 'project:\n  stack: node-ts\n',
+  );
+  const cfg = yaml.parse(cfgRaw) as { project?: { stack?: string } };
+  const stack = cfg.project?.stack ?? 'node-ts';
+
+  const stackGates =
+    stack === 'python'
+      ? await import('./gates/python/index.js')
+      : stack === 'go'
+        ? await import('./gates/go/index.js')
+        : nodeGates;
 
   const task = await readTask({ workspace, taskMdRel });
   log(`task: ${task.id} — ${task.title}`);
@@ -111,12 +119,12 @@ export async function main(): Promise<number> {
   const gates = await runGates({
     order: ['format', 'lint', 'typecheck', 'test', 'coverage', 'security', 'commitMsg'],
     gates: {
-      format: { mode: quality.format, run: () => formatGate(workspace) },
-      lint: { mode: quality.lint, run: () => lintGate(workspace) },
-      typecheck: { mode: quality.typecheck, run: () => typecheckGate(workspace) },
-      test: { mode: quality.test, run: () => testGate(workspace) },
-      coverage: { mode: 'warn', run: () => coverageGate(workspace) },
-      security: { mode: quality.security, run: () => securityGate(workspace) },
+      format: { mode: quality.format, run: () => stackGates.formatGate(workspace) },
+      lint: { mode: quality.lint, run: () => stackGates.lintGate(workspace) },
+      typecheck: { mode: quality.typecheck, run: () => stackGates.typecheckGate(workspace) },
+      test: { mode: quality.test, run: () => stackGates.testGate(workspace) },
+      coverage: { mode: 'warn', run: () => stackGates.coverageGate(workspace) },
+      security: { mode: quality.security, run: () => stackGates.securityGate(workspace) },
       commitMsg: {
         mode: quality.commit_msg === 'skip' ? 'skip' : 'required',
         run: () => commitMsgGate(workspace, baseBranch),
