@@ -21,12 +21,13 @@ COPY --from=lib-build /worker/lib/package.json ./lib/package.json
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# non-root user (node:22 already has 'node' at UID 1000 — use 1001)
+RUN useradd -m -u 1001 worker
+
 # superpowers plugin (baked in)
 RUN mkdir -p /home/worker/.claude/plugins \
- && git clone --depth=1 https://github.com/obra/superpowers.git /home/worker/.claude/plugins/superpowers
-
-# non-root user
-RUN useradd -m -u 1000 worker && chown -R worker:worker /home/worker
+ && git clone --depth=1 https://github.com/obra/superpowers.git /home/worker/.claude/plugins/superpowers \
+ && chown -R worker:worker /home/worker
 USER worker
 
 COPY --chown=worker:worker entrypoint.sh /entrypoint.sh
