@@ -24,6 +24,13 @@ const env = (k: string) => {
 
 export async function main(): Promise<number> {
   const workspace = process.cwd();
+
+  const roleMd = process.env['ARANDANO_ROLE_MD'] ?? '';
+  if (roleMd.endsWith('reviewer.md')) {
+    const { reviewerMain } = await import('./reviewer/reviewerDriver.js');
+    return reviewerMain();
+  }
+
   const taskId = env('ARANDANO_TASK_ID');
   const taskMdRel = env('ARANDANO_TASK_MD');
   const cli = env('ARANDANO_CLI');
