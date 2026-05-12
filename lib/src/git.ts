@@ -13,7 +13,13 @@ export async function currentBranch(cwd: string): Promise<string> {
 }
 
 export async function createBranch(cwd: string, name: string): Promise<void> {
-  await git(['checkout', '-b', name], cwd);
+  try {
+    await git(['checkout', '-b', name], cwd);
+  } catch {
+    // branch already exists from a prior failed run — force-recreate from current HEAD
+    await git(['branch', '-D', name], cwd);
+    await git(['checkout', '-b', name], cwd);
+  }
 }
 
 export async function commitSubjects(cwd: string, base: string): Promise<string[]> {
