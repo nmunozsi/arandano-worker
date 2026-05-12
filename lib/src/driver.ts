@@ -6,6 +6,7 @@ import { commitSubjects, createBranch, currentBranch } from './git.js';
 import { detectRedGreen } from './tdd.js';
 import { invokeCli } from './invokeClaudeCode.js';
 import { runGates } from './runGates.js';
+import { runShell } from './gates/_shell.js';
 import * as nodeGates from './gates/index.js';
 import { commitMsgGate } from './gates/commitMsg.js';
 import { openPr } from './openPr.js';
@@ -72,6 +73,16 @@ export async function main(): Promise<number> {
     .slice(0, 40)}`;
   await createBranch(workspace, branch);
   log(`branch: ${branch} (base ${baseBranch})`);
+
+  const install = await (stack === 'python'
+    ? runShell({ cmd: 'pip', args: ['install', '-r', 'requirements.txt'], cwd: workspace })
+    : stack === 'go'
+      ? runShell({ cmd: 'go', args: ['mod', 'download'], cwd: workspace })
+      : runShell({ cmd: 'npm', args: ['install'], cwd: workspace }));
+  log(`install exit=${install.exitCode}`);
+  if (!install.passed) {
+    return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure' });
+  }
 
   const prompt = [
     `You are running as the ${task.role} role.`,
