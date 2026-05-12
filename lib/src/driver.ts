@@ -29,6 +29,7 @@ export async function main(): Promise<number> {
   const taskId = env('ARANDANO_TASK_ID');
   const taskMdRel = env('ARANDANO_TASK_MD');
   const cli = env('ARANDANO_CLI');
+  const model = env('ARANDANO_MODEL');
   const tdd = env('ARANDANO_TDD') as 'strict' | 'relaxed';
   const runFolder = env('ARANDANO_RUN_FOLDER');
   const quality = JSON.parse(env('ARANDANO_QUALITY_JSON')) as {
@@ -81,7 +82,7 @@ export async function main(): Promise<number> {
   ].join('\n');
   const cliRun = await invokeCli({
     cli,
-    args: ['--print'],
+    args: ['--print', '--model', model],
     prompt,
     cwd: workspace,
     env: process.env,
