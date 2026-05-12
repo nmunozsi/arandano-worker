@@ -93,12 +93,13 @@ export async function main(): Promise<number> {
   ].join('\n');
   const cliRun = await invokeCli({
     cli,
-    args: ['--print', '--model', model],
+    args: ['--print', '--dangerously-skip-permissions', '--model', model],
     prompt,
     cwd: workspace,
     env: process.env,
   });
   log(`cli exit=${cliRun.exitCode}`);
+  if (cliRun.output) log(cliRun.output.slice(0, 2000));
   if (cliRun.exitCode !== 0) {
     return await fail({
       workspace,
