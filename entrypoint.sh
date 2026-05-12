@@ -2,4 +2,4 @@
 set -eu
 
 : "${ARANDANO_TASK_ID:?ARANDANO_TASK_ID required}"
-exec node /opt/worker/lib/dist/driver.js
+exec node /opt/worker/lib/dist/start.js
