@@ -1,4 +1,9 @@
 import { main } from './driver.js';
 
-const code = await main();
-process.exit(code);
+try {
+  const code = await main();
+  process.exit(code);
+} catch (err) {
+  console.error('[worker crash]', err);
+  process.exit(1);
+}
