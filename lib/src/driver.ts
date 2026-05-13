@@ -175,6 +175,7 @@ export async function main(): Promise<number> {
     bodyPath,
   });
   log(`pr: ${pr.url ?? '<none>'} passed=${pr.passed}`);
+  if (!pr.passed && pr.output) log(`pr error: ${pr.output.slice(0, 1000)}`);
 
   await writeResult(join(workspace, '.arandano', 'runs', runFolder, 'result.json'), {
     task_id: taskId,
