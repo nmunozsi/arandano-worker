@@ -12,11 +12,12 @@ export async function currentBranch(cwd: string): Promise<string> {
   return git(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
 }
 
-export async function createBranch(cwd: string, name: string): Promise<void> {
+export async function createBranch(cwd: string, name: string, base: string): Promise<void> {
   try {
     await git(['checkout', '-b', name], cwd);
   } catch {
-    // branch already exists from a prior failed run — force-recreate from current HEAD
+    // branch already exists from a prior failed run — switch to base first, then recreate
+    await git(['checkout', base], cwd);
     await git(['branch', '-D', name], cwd);
     await git(['checkout', '-b', name], cwd);
   }

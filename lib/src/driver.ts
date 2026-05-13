@@ -71,7 +71,7 @@ export async function main(): Promise<number> {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .slice(0, 40)}`;
-  await createBranch(workspace, branch);
+  await createBranch(workspace, branch, baseBranch);
   log(`branch: ${branch} (base ${baseBranch})`);
 
   const install = await (stack === 'python'
