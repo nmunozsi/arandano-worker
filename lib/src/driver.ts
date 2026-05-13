@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import yaml from 'yaml';
 import { readTask } from './readTask.js';
-import { commitSubjects, createBranch, currentBranch } from './git.js';
+import { git, commitSubjects, createBranch, currentBranch } from './git.js';
 import { detectRedGreen } from './tdd.js';
 import { invokeCli } from './invokeClaudeCode.js';
 import { runGates } from './runGates.js';
@@ -53,8 +53,12 @@ export async function main(): Promise<number> {
   const cfgRaw = await readFile(join(workspace, '.arandano', 'config.yaml'), 'utf8').catch(
     () => 'project:\n  stack: node-ts\n',
   );
-  const cfg = yaml.parse(cfgRaw) as { project?: { stack?: string } };
+  const cfg = yaml.parse(cfgRaw) as { project?: { stack?: string; default_branch?: string } };
   const stack = cfg.project?.stack ?? 'node-ts';
+  const defaultBranch = cfg.project?.default_branch ?? 'main';
+
+  // A prior failed run may have left the workspace on an agent branch — reset to base.
+  await git(['checkout', defaultBranch], workspace).catch(() => {});
 
   const stackGates =
     stack === 'python'
