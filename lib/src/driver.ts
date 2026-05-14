@@ -58,6 +58,8 @@ export async function main(): Promise<number> {
   const defaultBranch = cfg.project?.default_branch ?? 'main';
 
   // A prior failed run may have left the workspace on an agent branch — reset to base.
+  // Use defaultBranch directly (not currentBranch()) to avoid the git HEAD race when
+  // multiple containers share the same workspace directory.
   await git(['checkout', defaultBranch], workspace).catch(() => {});
 
   const stackGates =
@@ -70,7 +72,7 @@ export async function main(): Promise<number> {
   const task = await readTask({ workspace, taskMdRel });
   log(`task: ${task.id} — ${task.title}`);
 
-  const baseBranch = await currentBranch(workspace);
+  const baseBranch = defaultBranch;
   const branch = `agent/${task.id}-${task.title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
