@@ -18,6 +18,12 @@ COPY --from=lib-build /worker/lib/dist ./lib/dist
 COPY --from=lib-build /worker/lib/node_modules ./lib/node_modules
 COPY --from=lib-build /worker/lib/package.json ./lib/package.json
 
+# Bake the gitmoji-commits skill into a known path the prompt references.
+COPY lib/src/skills/gitmoji-commits/SKILL.md /opt/arandano/skills/gitmoji-commits/SKILL.md
+
+# Vendor the commitlint rule pack so `npx commitlint` resolves it without npm install.
+COPY lib/src/commitlint-rules /opt/arandano/commitlint-rules
+
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 

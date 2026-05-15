@@ -93,8 +93,9 @@ export async function main(): Promise<number> {
   const prompt = [
     `You are running as the ${task.role} role.`,
     `Read .arandano/roles/${task.role}.md, src/CONTEXT.md, planning/memory/coding-standards.md.`,
+    `Read the SKILL.md at /opt/arandano/skills/gitmoji-commits/SKILL.md and follow its commit format on every commit you produce.`,
     `Task file: ${task.filePath}.`,
-    `Use TDD (${tdd}). Make conventional commits.`,
+    `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits skill format.`,
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
   const cliRun = await invokeCli({
