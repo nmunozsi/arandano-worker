@@ -26,6 +26,10 @@ export async function main(): Promise<number> {
     const { reviewerMain } = await import('./reviewer/reviewerDriver.js');
     return reviewerMain();
   }
+  if (roleMd.endsWith('architect.md') || process.env['ARANDANO_TASK_ID'] === 'T-architect') {
+    const { architectMain } = await import('./architect/architectDriver.js');
+    return architectMain();
+  }
 
   const taskId = env('ARANDANO_TASK_ID');
   const taskMdRel = env('ARANDANO_TASK_MD');
