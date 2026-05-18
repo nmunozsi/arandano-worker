@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { runShell } from '../gates/_shell.js';
 import { git, createBranch } from '../git.js';
 import { invokeCli } from '../invokeClaudeCode.js';
@@ -11,6 +12,72 @@ const env = (k: string) => {
   return v;
 };
 
+export interface PlanContextTask {
+  id: string;
+  branch: string;
+  prUrl?: string;
+}
+
+export interface PlanContext {
+  planSlug: string;
+  defaultBranch: string;
+  tasks: PlanContextTask[];
+}
+
+/**
+ * Resolves plan context using priority: inline JSON env var → file path → null.
+ * @param workspaceRoot  Base directory for resolving ARANDANO_PLAN_CONTEXT_PATH.
+ *                       Defaults to process.cwd().
+ */
+export async function resolvePlanContext(
+  workspaceRoot = process.cwd(),
+): Promise<PlanContext | null> {
+  const inlineJson = process.env['ARANDANO_PLAN_CONTEXT_JSON'];
+  if (inlineJson) {
+    try {
+      return JSON.parse(inlineJson) as PlanContext;
+    } catch {
+      // malformed — try file
+    }
+  }
+  const contextPath = process.env['ARANDANO_PLAN_CONTEXT_PATH'];
+  if (contextPath) {
+    try {
+      const raw = await readFile(resolve(workspaceRoot, contextPath), 'utf8');
+      return JSON.parse(raw) as PlanContext;
+    } catch {
+      // file unreadable — fall back to null
+    }
+  }
+  return null;
+}
+
+export function buildArchitectPrompt(
+  planSlug: string,
+  defaultBranch: string,
+  planContext: PlanContext | null,
+): string {
+  const taskLines =
+    planContext?.tasks.length
+      ? planContext.tasks
+          .map((t) => `  - ${t.id}: branch=${t.branch}${t.prUrl ? ` pr=${t.prUrl}` : ''}`)
+          .join('\n')
+      : '  (no task context available — read plan files only)';
+
+  return [
+    `You are running as the architect role.`,
+    `Read /opt/arandano/skills/architect/SKILL.md and apply minimal edits to docs/architecture.md.`,
+    `The plan slug is "${planSlug}".`,
+    `Coder tasks in this plan:`,
+    taskLines,
+    `For each task you may run:`,
+    `  gh pr diff <prUrl>                                              (preferred)`,
+    `  git fetch origin <branch> --depth=1 && git diff ${defaultBranch}...<branch>  (fallback)`,
+    `Only fetch what you need. If no architectural change applies, print exactly "architect: no-op" and exit without committing.`,
+    `Otherwise make ONE commit with subject ":memo: docs(arch): refresh after ${planSlug}".`,
+  ].join('\n');
+}
+
 export async function architectMain(): Promise<number> {
   const workspace = process.cwd();
   const taskId = env('ARANDANO_TASK_ID');
@@ -18,10 +85,8 @@ export async function architectMain(): Promise<number> {
   const cli = env('ARANDANO_CLI');
   const model = env('ARANDANO_MODEL');
   const planSlug = process.env['ARANDANO_PLAN_SLUG'] ?? 'plan';
-  const mergeRange = process.env['ARANDANO_PLAN_MERGE_RANGE'] ?? '';
   const startedAt = new Date().toISOString();
 
-  // Reset to the default branch then create the architect branch.
   const cfgRaw = await runShell({
     cmd: 'cat',
     args: ['.arandano/config.yaml'],
@@ -33,14 +98,8 @@ export async function architectMain(): Promise<number> {
   const branch = `agent/${taskId}-${Date.now()}`;
   await createBranch(workspace, branch, defaultBranch);
 
-  const prompt = [
-    `You are running as the architect role.`,
-    `Read /opt/arandano/skills/architect/SKILL.md and apply minimal edits to docs/architecture.md.`,
-    `The plan slug is "${planSlug}". The merged commit range is "${mergeRange}".`,
-    `Inspect: docs/architecture.md (current), the plan files under docs/ or .arandano/specs/, and "git log ${mergeRange}".`,
-    `If no architectural change applies, print exactly "architect: no-op" and exit without committing.`,
-    `Otherwise make ONE commit with subject ":memo: docs(arch): refresh after ${planSlug}".`,
-  ].join('\n');
+  const planContext = await resolvePlanContext(workspace);
+  const prompt = buildArchitectPrompt(planSlug, defaultBranch, planContext);
 
   const cliRun = await invokeCli({
     cli,
@@ -81,12 +140,7 @@ export async function architectMain(): Promise<number> {
   }
 
   const bodyPath = join(workspace, '.arandano', 'runs', runFolder, 'pr-body.md');
-  await writeJournal(
-    bodyPath,
-    [`Architecture refresh for plan \`${planSlug}\`.`, '', `Merge range: \`${mergeRange}\``].join(
-      '\n',
-    ),
-  );
+  await writeJournal(bodyPath, `Architecture refresh for plan \`${planSlug}\`.`);
   const pr = await openPr({
     cwd: workspace,
     baseBranch: defaultBranch,
