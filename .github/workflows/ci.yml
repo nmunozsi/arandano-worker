@@ -11,6 +11,8 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,4 +20,7 @@ jobs:
       - run: cd lib && npm install && npm test && npm run build
       - uses: docker/setup-buildx-action@v3
       - run: docker build -t arandano-worker:ci .
-      - run: docker run --rm arandano-worker:ci
+      - name: smoke — verify runtime dependencies
+        run: |
+          docker run --rm --entrypoint sh arandano-worker:ci -c \
+            "node --version && git --version && claude --version"
