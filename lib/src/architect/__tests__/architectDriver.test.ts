@@ -65,6 +65,15 @@ describe('resolvePlanContext', () => {
     expect(ctx).toBeNull();
   });
 
+  it('falls back to file when ARANDANO_PLAN_CONTEXT_JSON is malformed but file is valid', async () => {
+    process.env['ARANDANO_PLAN_CONTEXT_JSON'] = '{not valid json';
+    const contextFile = join(dir, 'plan-context.json');
+    await writeFile(contextFile, JSON.stringify(FIXTURE_CONTEXT));
+    process.env['ARANDANO_PLAN_CONTEXT_PATH'] = contextFile;
+    const ctx = await resolvePlanContext(dir);
+    expect(ctx?.planSlug).toBe('smoke');
+  });
+
   it('returns null (no crash) when ARANDANO_PLAN_CONTEXT_PATH file is missing', async () => {
     process.env['ARANDANO_PLAN_CONTEXT_PATH'] = join(dir, 'does-not-exist.json');
     const ctx = await resolvePlanContext(dir);
