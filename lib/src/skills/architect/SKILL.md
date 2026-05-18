@@ -11,7 +11,34 @@ You are running as the `architect` role. Your one job is to refresh `docs/archit
 
 - `docs/architecture.md` — the current file.
 - Plan files (path provided by the orchestrator): `<spec>/plans/<plan-slug>/{spec.md, plan.md, phase-*/phase.md, T*.md}`.
-- Git history of the plan's merge range: `git log <base>..<head>` (the range is in env var `ARANDANO_PLAN_MERGE_RANGE`).
+- Per-task coder context: branch names and PR URLs are already in your prompt (supplied by the driver from `ARANDANO_PLAN_CONTEXT_JSON`).
+
+## Reading plan context
+
+The driver resolves `ARANDANO_PLAN_CONTEXT_JSON` (inline) or `ARANDANO_PLAN_CONTEXT_PATH` (file) and injects the result directly into your prompt — you never need to read the env var or file yourself. The branch/PR list is already there. Do not fetch all branches upfront; scan `docs/architecture.md` and the plan files first to understand current state and intent.
+
+## Deciding what to fetch
+
+Fetch a task's diff when the plan file or task title signals:
+
+- A new package, library, or external dependency is added
+- A new top-level directory or module is introduced
+- An inter-service or inter-package interface is created or changed
+- The data model, API surface, or deployment topology changes
+
+Skip the fetch when the task is purely internal: bug fixes, test additions, documentation changes, renames, or changes isolated within an existing component.
+
+## Fetching and diffing
+
+Prefer `gh pr diff <prUrl>` when a PR URL is available — it includes the PR description alongside the code diff. Fall back to `git fetch + git diff` when no PR URL is present or `gh` fails.
+
+Run these commands in the container:
+
+  gh pr diff <prUrl>
+  git fetch origin <branch> --depth=1
+  git diff <defaultBranch>...<branch> -- '*.ts' '*.go' '*.py' 'package.json' 'go.mod'
+
+If `gh pr diff` fails, try the git fetch + diff fallback. If that also fails (branch deleted), log a warning and continue without that task's diff.
 
 ## The template (the doc has exactly these six sections)
 
@@ -75,7 +102,7 @@ Edit:
 
 ## When the diff is empty
 
-If after applying the rules above your changes would not modify the file, **do not commit**. Print `architect: no-op` to stdout. The worker's `architect-driver` recognises this and skips PR creation.
+After reading all plan files and any fetched diffs, if no section of `docs/architecture.md` would mislead a new engineer about how the system works, **do not commit**. Print `architect: no-op` to stdout. The worker's `architect-driver` recognises this and skips PR creation.
 
 ## Commits
 
