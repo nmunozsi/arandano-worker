@@ -103,16 +103,14 @@ export async function architectMain(): Promise<number> {
 
   // MCP wiring — soft-fail if cache isn't ready. Orchestrator pre-warms on host (T3).
   let mcpConfigPath: string | undefined;
+  let mcpJournalLine = '';
   const requestedServers = (process.env['ARANDANO_MCP_SERVERS'] ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
   if (requestedServers.includes('gitnexus')) {
     const cacheResult = await verifyGitnexusCache(workspace);
-    await writeJournal(
-      join(workspace, '.arandano', 'runs', runFolder, 'journal.md'),
-      `gitnexus: ${cacheResult}\n`,
-    );
+    mcpJournalLine = `gitnexus: ${cacheResult}\n`;
     if (cacheResult === 'cache-hit') {
       await writeRegistryEntry(workspace);
       mcpConfigPath = await writeMcpConfig(workspace, ['gitnexus']);
@@ -142,10 +140,11 @@ export async function architectMain(): Promise<number> {
   if (!changed || noopMarker) {
     await writeJournal(
       join(workspace, '.arandano', 'runs', runFolder, 'journal.md'),
-      [
-        `architect: no-op`,
-        `cli output (first 500 chars): ${(cliRun.output ?? '').slice(0, 500)}`,
-      ].join('\n'),
+      mcpJournalLine +
+        [
+          `architect: no-op`,
+          `cli output (first 500 chars): ${(cliRun.output ?? '').slice(0, 500)}`,
+        ].join('\n'),
     );
     await writeResult(join(workspace, '.arandano', 'runs', runFolder, 'result.json'), {
       task_id: taskId,
