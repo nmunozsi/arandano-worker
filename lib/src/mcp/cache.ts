@@ -23,29 +23,18 @@ async function currentHead(workspaceRoot: string): Promise<string | null> {
  * NEVER runs analyze. Returns the cache state so the caller can decide.
  */
 export async function verifyGitnexusCache(workspaceRoot: string): Promise<CacheResult> {
-  const onPath = await gitnexusOnPath();
-  process.stderr.write(`[cache] gitnexusOnPath=${onPath} cwd=${workspaceRoot}\n`);
-  if (!onPath) return 'skipped';
-
-  const gnDir = join(workspaceRoot, '.gitnexus');
-  const dirExists = existsSync(gnDir);
-  process.stderr.write(`[cache] .gitnexus exists(${gnDir})=${dirExists}\n`);
-  if (!dirExists) return 'missing';
+  if (!(await gitnexusOnPath())) return 'skipped';
+  if (!existsSync(join(workspaceRoot, '.gitnexus'))) return 'missing';
 
   const head = await currentHead(workspaceRoot);
-  process.stderr.write(`[cache] currentHead=${head}\n`);
   if (!head) return 'skipped';
 
   const stampPath = join(workspaceRoot, STAMP_REL_PATH);
-  const stampExists = existsSync(stampPath);
-  process.stderr.write(`[cache] stamp exists(${stampPath})=${stampExists}\n`);
-  if (!stampExists) return 'missing';
+  if (!existsSync(stampPath)) return 'missing';
   try {
     const stamp = (await readFile(stampPath, 'utf8')).trim();
-    process.stderr.write(`[cache] stamp=${stamp} head=${head} match=${stamp === head}\n`);
     return stamp === head ? 'cache-hit' : 'stale';
-  } catch (e) {
-    process.stderr.write(`[cache] readFile threw: ${(e as Error).message}\n`);
+  } catch {
     return 'missing';
   }
 }
