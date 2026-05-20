@@ -29,6 +29,12 @@ COPY lib/src/commitlint-rules /opt/arandano/commitlint-rules
 # Claude Code CLI
 RUN npm install -g @anthropic-ai/claude-code
 
+# GitNexus — code-graph MCP server (PolyForm Noncommercial).
+# Pinned to match the host-installed version in arandano/packages/core/src/mcp/cacheHost.ts.
+# Used in-container only as a stdio MCP server (`gitnexus mcp`); analysis happens on the host.
+RUN npm install -g gitnexus@1.6.5
+RUN gitnexus --version
+
 # non-root user (node:22 already has 'node' at UID 1000 — use 1001)
 RUN useradd -m -u 1001 worker
 
