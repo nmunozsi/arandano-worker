@@ -5,6 +5,9 @@ import { git, createBranch } from '../git.js';
 import { invokeCli } from '../invokeClaudeCode.js';
 import { openPr } from '../openPr.js';
 import { writeJournal, writeResult } from '../writeResult.js';
+import { verifyGitnexusCache } from '../mcp/cache.js';
+import { writeRegistryEntry } from '../mcp/registry.js';
+import { writeMcpConfig } from '../mcp/config.js';
 
 const env = (k: string) => {
   const v = process.env[k];
@@ -98,6 +101,24 @@ export async function architectMain(): Promise<number> {
   const branch = `agent/${taskId}-${Date.now()}`;
   await createBranch(workspace, branch, defaultBranch);
 
+  // MCP wiring — soft-fail if cache isn't ready. Orchestrator pre-warms on host (T3).
+  let mcpConfigPath: string | undefined;
+  const requestedServers = (process.env['ARANDANO_MCP_SERVERS'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  if (requestedServers.includes('gitnexus')) {
+    const cacheResult = await verifyGitnexusCache(workspace);
+    await writeJournal(
+      join(workspace, '.arandano', 'runs', runFolder, 'journal.md'),
+      `gitnexus: ${cacheResult}\n`,
+    );
+    if (cacheResult === 'cache-hit') {
+      await writeRegistryEntry(workspace);
+      mcpConfigPath = await writeMcpConfig(workspace, ['gitnexus']);
+    }
+  }
+
   const planContext = await resolvePlanContext(workspace);
   const prompt = buildArchitectPrompt(planSlug, defaultBranch, planContext);
 
@@ -107,6 +128,7 @@ export async function architectMain(): Promise<number> {
     prompt,
     cwd: workspace,
     env: process.env,
+    ...(mcpConfigPath ? { mcpConfigPath } : {}),
   });
 
   const noopMarker = /architect:\s*no-op/i.test(cliRun.output ?? '');

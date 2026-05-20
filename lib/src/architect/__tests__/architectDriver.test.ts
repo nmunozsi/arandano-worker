@@ -1,8 +1,22 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolvePlanContext, buildArchitectPrompt } from '../architectDriver.js';
+import { resolvePlanContext, buildArchitectPrompt, architectMain } from '../architectDriver.js';
+
+vi.mock('../../gates/_shell.js', () => ({ runShell: vi.fn() }));
+vi.mock('../../git.js', () => ({ git: vi.fn(), createBranch: vi.fn() }));
+vi.mock('../../invokeClaudeCode.js', () => ({ invokeCli: vi.fn() }));
+vi.mock('../../writeResult.js', () => ({ writeJournal: vi.fn(), writeResult: vi.fn() }));
+vi.mock('../../openPr.js', () => ({ openPr: vi.fn() }));
+
+import { runShell } from '../../gates/_shell.js';
+import { git, createBranch } from '../../git.js';
+import { invokeCli } from '../../invokeClaudeCode.js';
+import { writeJournal, writeResult } from '../../writeResult.js';
+import * as cacheModule from '../../mcp/cache.js';
+import * as registryModule from '../../mcp/registry.js';
+import * as configModule from '../../mcp/config.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -117,5 +131,100 @@ describe('architectDriver no-op detection', () => {
     expect(re.test('done, architect: no-op, exiting')).toBe(true);
     expect(re.test('ARCHITECT:    NO-OP')).toBe(true);
     expect(re.test('architect ok')).toBe(false);
+  });
+});
+
+// Shared harness setup for architectMain() integration tests
+function setupArchitectEnv() {
+  process.env['ARANDANO_TASK_ID'] = 'T-architect';
+  process.env['ARANDANO_RUN_FOLDER'] = 'run-test';
+  process.env['ARANDANO_CLI'] = 'claude';
+  process.env['ARANDANO_MODEL'] = 'claude-opus-4-5';
+}
+
+function teardownArchitectEnv() {
+  delete process.env['ARANDANO_TASK_ID'];
+  delete process.env['ARANDANO_RUN_FOLDER'];
+  delete process.env['ARANDANO_CLI'];
+  delete process.env['ARANDANO_MODEL'];
+  delete process.env['ARANDANO_MCP_SERVERS'];
+}
+
+function setupInfrastructureMocks() {
+  const shellResult = { passed: true, exitCode: 0, output: '', durationMs: 0 };
+  vi.mocked(runShell).mockResolvedValue(shellResult);
+  vi.mocked(git).mockResolvedValue(undefined as never);
+  vi.mocked(createBranch).mockResolvedValue(undefined);
+  vi.mocked(invokeCli).mockResolvedValue({ exitCode: 0, output: 'architect: no-op' });
+  vi.mocked(writeJournal).mockResolvedValue(undefined);
+  vi.mocked(writeResult).mockResolvedValue(undefined);
+}
+
+describe('architectMain — MCP wiring', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    setupArchitectEnv();
+    setupInfrastructureMocks();
+    delete process.env['ARANDANO_MCP_SERVERS'];
+  });
+
+  afterEach(() => {
+    teardownArchitectEnv();
+  });
+
+  it('passes --mcp-config to invokeCli when ARANDANO_MCP_SERVERS=gitnexus and cache is hit', async () => {
+    process.env['ARANDANO_MCP_SERVERS'] = 'gitnexus';
+    vi.spyOn(cacheModule, 'verifyGitnexusCache').mockResolvedValue('cache-hit');
+    const registrySpy = vi.spyOn(registryModule, 'writeRegistryEntry').mockResolvedValue(undefined);
+    const configSpy = vi
+      .spyOn(configModule, 'writeMcpConfig')
+      .mockResolvedValue('.claude/mcp.json');
+
+    await architectMain();
+
+    expect(registrySpy).toHaveBeenCalledWith(expect.any(String));
+    expect(configSpy).toHaveBeenCalledWith(expect.any(String), ['gitnexus']);
+    expect(vi.mocked(invokeCli)).toHaveBeenCalledWith(
+      expect.objectContaining({ mcpConfigPath: '.claude/mcp.json' }),
+    );
+  });
+
+  it('does NOT pass --mcp-config when ARANDANO_MCP_SERVERS is absent', async () => {
+    const registrySpy = vi.spyOn(registryModule, 'writeRegistryEntry');
+    const configSpy = vi.spyOn(configModule, 'writeMcpConfig');
+
+    await architectMain();
+
+    expect(registrySpy).not.toHaveBeenCalled();
+    expect(configSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeCli)).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mcpConfigPath: expect.anything() }),
+    );
+  });
+
+  it('does NOT pass --mcp-config when verifyGitnexusCache returns "stale"', async () => {
+    process.env['ARANDANO_MCP_SERVERS'] = 'gitnexus';
+    vi.spyOn(cacheModule, 'verifyGitnexusCache').mockResolvedValue('stale');
+    const configSpy = vi.spyOn(configModule, 'writeMcpConfig');
+
+    await architectMain();
+
+    expect(configSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeCli)).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mcpConfigPath: expect.anything() }),
+    );
+  });
+
+  it('does NOT pass --mcp-config when verifyGitnexusCache returns "missing"', async () => {
+    process.env['ARANDANO_MCP_SERVERS'] = 'gitnexus';
+    vi.spyOn(cacheModule, 'verifyGitnexusCache').mockResolvedValue('missing');
+    const configSpy = vi.spyOn(configModule, 'writeMcpConfig');
+
+    await architectMain();
+
+    expect(configSpy).not.toHaveBeenCalled();
+    expect(vi.mocked(invokeCli)).toHaveBeenCalledWith(
+      expect.not.objectContaining({ mcpConfigPath: expect.anything() }),
+    );
   });
 });
