@@ -11,6 +11,7 @@ import * as nodeGates from './gates/index.js';
 import { commitMsgGate } from './gates/commitMsg.js';
 import { openPr } from './openPr.js';
 import { writeJournal, writeResult } from './writeResult.js';
+import { PerfRecorder } from './perf.js';
 
 const env = (k: string) => {
   const v = process.env[k];
@@ -20,6 +21,7 @@ const env = (k: string) => {
 
 export async function main(): Promise<number> {
   const workspace = process.cwd();
+  const perf = new PerfRecorder();
 
   const roleMd = process.env['ARANDANO_ROLE_MD'] ?? '';
   if (roleMd.endsWith('reviewer.md')) {
@@ -61,6 +63,9 @@ export async function main(): Promise<number> {
   const stack = cfg.project?.stack ?? 'node-ts';
   const defaultBranch = cfg.project?.default_branch ?? 'main';
 
+  // checkout phase: reset to base branch, load stack gates, read task, create agent branch
+  const stopCheckout = perf.start('checkout');
+
   // A prior failed run may have left the workspace on an agent branch — reset to base.
   // Use defaultBranch directly (not currentBranch()) to avoid the git HEAD race when
   // multiple containers share the same workspace directory.
@@ -84,14 +89,18 @@ export async function main(): Promise<number> {
   await createBranch(workspace, branch, baseBranch);
   log(`branch: ${branch} (base ${baseBranch})`);
 
+  stopCheckout();
+
+  const stopInstall = perf.start('install');
   const install = await (stack === 'python'
     ? runShell({ cmd: 'pip', args: ['install', '-r', 'requirements.txt'], cwd: workspace })
     : stack === 'go'
       ? runShell({ cmd: 'go', args: ['mod', 'download'], cwd: workspace })
       : runShell({ cmd: 'npm', args: ['install'], cwd: workspace }));
+  stopInstall();
   log(`install exit=${install.exitCode}`);
   if (!install.passed) {
-    return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure' });
+    return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure', perf, stack });
   }
 
   const prompt = [
@@ -102,6 +111,7 @@ export async function main(): Promise<number> {
     `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits skill format.`,
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
+  const stopCli = perf.start('cli');
   const cliRun = await invokeCli({
     cli,
     args: ['--print', '--dangerously-skip-permissions', '--model', model],
@@ -109,6 +119,7 @@ export async function main(): Promise<number> {
     cwd: workspace,
     env: process.env,
   });
+  stopCli();
   log(`cli exit=${cliRun.exitCode}`);
   if (cliRun.output) log(cliRun.output.slice(0, 2000));
   if (cliRun.exitCode !== 0) {
@@ -120,6 +131,8 @@ export async function main(): Promise<number> {
       journal,
       startedAt,
       reason: 'cli_failure',
+      perf,
+      stack,
     });
   }
 
@@ -136,6 +149,8 @@ export async function main(): Promise<number> {
         journal,
         startedAt,
         reason: 'tdd_violation',
+        perf,
+        stack,
       });
     }
   }
@@ -143,15 +158,54 @@ export async function main(): Promise<number> {
   const gates = await runGates({
     order: ['format', 'lint', 'typecheck', 'test', 'coverage', 'security', 'commitMsg'],
     gates: {
-      format: { mode: quality.format, run: () => stackGates.formatGate(workspace) },
-      lint: { mode: quality.lint, run: () => stackGates.lintGate(workspace) },
-      typecheck: { mode: quality.typecheck, run: () => stackGates.typecheckGate(workspace) },
-      test: { mode: quality.test, run: () => stackGates.testGate(workspace) },
-      coverage: { mode: 'warn', run: () => stackGates.coverageGate(workspace) },
-      security: { mode: quality.security, run: () => stackGates.securityGate(workspace) },
+      format: {
+        mode: quality.format,
+        run: async () => {
+          const stop = perf.start('gate.format');
+          try { return await stackGates.formatGate(workspace); } finally { stop(); }
+        },
+      },
+      lint: {
+        mode: quality.lint,
+        run: async () => {
+          const stop = perf.start('gate.lint');
+          try { return await stackGates.lintGate(workspace); } finally { stop(); }
+        },
+      },
+      typecheck: {
+        mode: quality.typecheck,
+        run: async () => {
+          const stop = perf.start('gate.typecheck');
+          try { return await stackGates.typecheckGate(workspace); } finally { stop(); }
+        },
+      },
+      test: {
+        mode: quality.test,
+        run: async () => {
+          const stop = perf.start('gate.test');
+          try { return await stackGates.testGate(workspace); } finally { stop(); }
+        },
+      },
+      coverage: {
+        mode: 'warn',
+        run: async () => {
+          const stop = perf.start('gate.coverage');
+          try { return await stackGates.coverageGate(workspace); } finally { stop(); }
+        },
+      },
+      security: {
+        mode: quality.security,
+        run: async () => {
+          const stop = perf.start('gate.security');
+          try { return await stackGates.securityGate(workspace); } finally { stop(); }
+        },
+      },
       commitMsg: {
         mode: quality.commit_msg === 'skip' ? 'skip' : 'required',
-        run: () => commitMsgGate(workspace, baseBranch),
+        run: async () => {
+          const stop = perf.start('gate.commitMsg');
+          try { return await commitMsgGate(workspace, baseBranch); } finally { stop(); }
+        },
       },
     },
   });
@@ -169,11 +223,14 @@ export async function main(): Promise<number> {
       startedAt,
       reason: 'quality_violation',
       gates,
+      perf,
+      stack,
     });
   }
 
   const bodyPath = join(workspace, '.arandano', 'runs', runFolder, 'pr-body.md');
   await writeJournal(bodyPath, [`Closes ${task.filePath}`, '', task.body].join('\n'));
+  const stopPush = perf.start('push_and_pr');
   const pr = await openPr({
     cwd: workspace,
     baseBranch,
@@ -181,6 +238,7 @@ export async function main(): Promise<number> {
     title: `[${task.id}] ${task.title}`,
     bodyPath,
   });
+  stopPush();
   log(`pr: ${pr.url ?? '<none>'} passed=${pr.passed}`);
   if (!pr.passed && pr.output) log(`pr error: ${pr.output.slice(0, 1000)}`);
 
@@ -200,6 +258,11 @@ export async function main(): Promise<number> {
     join(workspace, '.arandano', 'runs', runFolder, 'journal.md'),
     journal.join('\n'),
   );
+  await perf.writeTimingsJson(join(workspace, '.arandano', 'runs', runFolder, 'timings.json'), {
+    taskId,
+    side: 'worker',
+    stack,
+  });
   return pr.passed ? 0 : 1;
 }
 
@@ -212,7 +275,15 @@ async function fail(opts: {
   startedAt: string;
   reason: string;
   gates?: Awaited<ReturnType<typeof runGates>>;
+  perf?: PerfRecorder;
+  stack?: string;
 }): Promise<number> {
+  if (opts.perf) {
+    await opts.perf.writeTimingsJson(
+      join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'timings.json'),
+      { taskId: opts.taskId, side: 'worker', stack: opts.stack },
+    );
+  }
   await writeResult(join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'result.json'), {
     task_id: opts.taskId,
     branch: opts.branch,
