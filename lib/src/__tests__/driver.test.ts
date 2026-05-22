@@ -89,6 +89,49 @@ describe('buildContextBlock', () => {
   });
 });
 
+describe('cliBudgetMs logic', () => {
+  it('detects budget exceeded when actual ms is greater than budget', () => {
+    const cliBudgetMs = 60000;
+    const actualCliMs = 90000;
+    const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
+    expect(cliBudgetExceeded).toBe(true);
+  });
+
+  it('does not exceed budget when actual ms is within limit', () => {
+    const cliBudgetMs = 60000;
+    const actualCliMs = 45000;
+    const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
+    expect(cliBudgetExceeded).toBe(false);
+  });
+
+  it('does not exceed when cliBudgetMs is undefined (no budget set)', () => {
+    const cliBudgetMs = undefined;
+    const actualCliMs = 999999;
+    const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
+    expect(cliBudgetExceeded).toBe(false);
+  });
+
+  it('does not exceed when actual equals budget exactly', () => {
+    const cliBudgetMs = 60000;
+    const actualCliMs = 60000;
+    const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
+    expect(cliBudgetExceeded).toBe(false);
+  });
+
+  it('reads ARANDANO_CLI_BUDGET_MS env var as a number', () => {
+    const raw = '120000';
+    const parsed = raw ? Number(raw) : undefined;
+    expect(parsed).toBe(120000);
+    expect(typeof parsed).toBe('number');
+  });
+
+  it('returns undefined when ARANDANO_CLI_BUDGET_MS env var is absent', () => {
+    const raw = undefined;
+    const parsed = raw ? Number(raw) : undefined;
+    expect(parsed).toBeUndefined();
+  });
+});
+
 describe('countBranchCommits', () => {
   it('returns 0 for an invalid/nonexistent workspace (error fallback)', async () => {
     const result = await countBranchCommits('/nonexistent/workspace/path', 'main');

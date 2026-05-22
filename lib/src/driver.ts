@@ -191,6 +191,18 @@ export async function main(): Promise<number> {
   stopCli();
   log(`cli exit=${cliRun.exitCode}`);
   if (cliRun.output) log(cliRun.output.slice(0, 2000));
+
+  const cliBudgetMs = process.env['ARANDANO_CLI_BUDGET_MS']
+    ? Number(process.env['ARANDANO_CLI_BUDGET_MS'])
+    : undefined;
+  const actualCliMs = perf.asObject()['cli'] ?? 0;
+  const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
+  if (cliBudgetExceeded) {
+    log(
+      `[arandano] cli_budget_ms exceeded: actual=${actualCliMs}ms budget=${cliBudgetMs}ms`,
+    );
+  }
+
   if (cliRun.exitCode !== 0) {
     return await fail({
       workspace,
@@ -204,6 +216,7 @@ export async function main(): Promise<number> {
       stack,
       eventsPath,
       baseBranch,
+      cliBudgetExceeded,
     });
   }
 
@@ -224,6 +237,7 @@ export async function main(): Promise<number> {
         stack,
         eventsPath,
         baseBranch,
+        cliBudgetExceeded,
       });
     }
   }
@@ -300,6 +314,7 @@ export async function main(): Promise<number> {
       stack,
       eventsPath,
       baseBranch,
+      cliBudgetExceeded,
     });
   }
 
@@ -346,6 +361,7 @@ export async function main(): Promise<number> {
       const parsed = JSON.parse(raw) as Record<string, unknown>;
       parsed['cli_tool_calls'] = cliToolCalls;
       parsed['cli_commits'] = cliCommits;
+      parsed['cli_budget_exceeded'] = cliBudgetExceeded;
       return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
     })
     .catch(() => {});
@@ -366,6 +382,7 @@ async function fail(opts: {
   stack?: string;
   eventsPath?: string;
   baseBranch?: string;
+  cliBudgetExceeded?: boolean;
 }): Promise<number> {
   if (opts.perf) {
     const timingsPath = join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'timings.json');
@@ -376,8 +393,8 @@ async function fail(opts: {
       console.warn('perf: failed to write timings.json:', e);
     });
 
-    // Best-effort: patch timings.json with cli event counts
-    if (opts.eventsPath || opts.baseBranch) {
+    // Best-effort: patch timings.json with cli event counts and budget flag
+    if (opts.eventsPath || opts.baseBranch || opts.cliBudgetExceeded !== undefined) {
       const cliToolCalls = opts.eventsPath ? await parseCliEvents(opts.eventsPath) : 0;
       const cliCommits =
         opts.baseBranch ? await countBranchCommits(opts.workspace, opts.baseBranch) : 0;
@@ -386,6 +403,7 @@ async function fail(opts: {
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           parsed['cli_tool_calls'] = cliToolCalls;
           parsed['cli_commits'] = cliCommits;
+          parsed['cli_budget_exceeded'] = opts.cliBudgetExceeded ?? false;
           return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
         })
         .catch(() => {});
