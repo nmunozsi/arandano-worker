@@ -42,7 +42,6 @@ export async function parseCliEvents(eventsPath: string): Promise<number> {
 
 export async function countBranchCommits(workspace: string, baseBranch: string): Promise<number> {
   try {
-    const { runShell } = await import('./gates/_shell.js');
     const r = await runShell({
       cmd: 'git',
       args: ['log', '--oneline', `${baseBranch}..HEAD`],
@@ -363,7 +362,7 @@ async function fail(opts: {
       const cliToolCalls = opts.eventsPath ? await parseCliEvents(opts.eventsPath) : 0;
       const cliCommits =
         opts.baseBranch ? await countBranchCommits(opts.workspace, opts.baseBranch) : 0;
-      readFile(timingsPath, 'utf8')
+      await readFile(timingsPath, 'utf8')
         .then((raw) => {
           const parsed = JSON.parse(raw) as Record<string, unknown>;
           parsed['cli_tool_calls'] = cliToolCalls;

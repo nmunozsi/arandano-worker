@@ -27,6 +27,7 @@ export async function invokeCli(opts: InvokeCliOpts): Promise<{ exitCode: number
   if (wantsStreamJson && opts.eventsPath) {
     await mkdir(dirname(opts.eventsPath), { recursive: true });
     fileStream = createWriteStream(opts.eventsPath, { encoding: 'utf8' });
+    fileStream.on('error', () => {});
   }
 
   return new Promise((resolve) => {
@@ -41,6 +42,7 @@ export async function invokeCli(opts: InvokeCliOpts): Promise<{ exitCode: number
     proc.stderr.on('data', (c: Buffer) => (buf += c.toString('utf8')));
     proc.stdin.end(opts.prompt);
 
+    proc.on('error', (e) => resolve({ exitCode: 1, output: String(e) }));
     proc.on('close', (code) => {
       if (fileStream) {
         fileStream.end(() => resolve({ exitCode: code ?? 1, output: buf }));
