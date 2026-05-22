@@ -13,6 +13,21 @@ import { openPr } from './openPr.js';
 import { writeJournal, writeResult } from './writeResult.js';
 import { PerfRecorder } from './perf.js';
 
+export async function buildContextBlock(workdir: string, paths: string[]): Promise<string> {
+  const blocks: string[] = [];
+  for (const rel of paths) {
+    try {
+      const content = await readFile(join(workdir, rel), 'utf8');
+      blocks.push(`\`\`\`${rel}\n${content}\n\`\`\``);
+    } catch {
+      // silently skip missing files
+    }
+  }
+  return blocks.length > 0
+    ? `<injected-context>\n${blocks.join('\n\n')}\n</injected-context>\n\n`
+    : '';
+}
+
 const env = (k: string) => {
   const v = process.env[k];
   if (!v) throw new Error(`missing env: ${k}`);
@@ -137,7 +152,10 @@ export async function main(): Promise<number> {
     return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure', perf, stack, baseBranch });
   }
 
-  const prompt = [
+  const injectPaths = (process.env['ARANDANO_INJECT_CONTEXT'] ?? '').split(':').filter(Boolean);
+  const contextBlock = await buildContextBlock(workspace, injectPaths);
+
+  const promptBody = [
     `You are running as the ${task.role} role.`,
     `Read .arandano/roles/${task.role}.md, src/CONTEXT.md, planning/memory/coding-standards.md.`,
     `Read the SKILL.md at /opt/arandano/skills/gitmoji-commits/SKILL.md and follow its commit format on every commit you produce.`,
@@ -145,6 +163,7 @@ export async function main(): Promise<number> {
     `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits skill format.`,
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
+  const prompt = contextBlock + promptBody;
   const eventsPath = join(workspace, '.arandano', 'runs', runFolder, 'cli-events.jsonl');
   const stopCli = perf.start('cli');
   let cliRun = await invokeCli({
