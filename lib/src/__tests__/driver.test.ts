@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseCliEvents, countBranchCommits } from '../driver.js';
+import { parseCliEvents, countBranchCommits, buildContextBlock } from '../driver.js';
 
 describe('parseCliEvents', () => {
   it('counts tool_use events in a valid jsonl file', async () => {
@@ -49,6 +49,43 @@ describe('parseCliEvents', () => {
       'utf8',
     );
     expect(await parseCliEvents(eventsPath)).toBe(1);
+  });
+});
+
+describe('buildContextBlock', () => {
+  it('wraps two files in injected-context with backtick blocks', async () => {
+    const dir = join(tmpdir(), `test-ctx-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'a.ts'), 'export const a = 1;\n', 'utf8');
+    await writeFile(join(dir, 'b.json'), '{"x":1}\n', 'utf8');
+    const result = await buildContextBlock(dir, ['a.ts', 'b.json']);
+    expect(result).toContain('<injected-context>');
+    expect(result).toContain('</injected-context>');
+    expect(result).toContain('```a.ts');
+    expect(result).toContain('```b.json');
+    expect(result).toContain('export const a = 1;');
+    expect(result).toContain('"x":1');
+    expect(result.endsWith('\n\n')).toBe(true);
+  });
+
+  it('silently skips missing paths and returns empty string when all missing', async () => {
+    const result = await buildContextBlock('/nonexistent/dir', ['missing.ts', 'also-missing.ts']);
+    expect(result).toBe('');
+  });
+
+  it('silently skips a missing path but includes present ones', async () => {
+    const dir = join(tmpdir(), `test-ctx-partial-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'present.ts'), 'const x = 1;\n', 'utf8');
+    const result = await buildContextBlock(dir, ['missing.ts', 'present.ts']);
+    expect(result).toContain('```present.ts');
+    expect(result).not.toContain('missing.ts');
+    expect(result).toContain('<injected-context>');
+  });
+
+  it('returns empty string for an empty paths array', async () => {
+    const result = await buildContextBlock('/any/dir', []);
+    expect(result).toBe('');
   });
 });
 
