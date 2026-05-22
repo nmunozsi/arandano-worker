@@ -39,7 +39,7 @@ RUN gitnexus --version
 RUN useradd -m -u 1001 worker
 
 # superpowers plugin (baked in)
-RUN mkdir -p /home/worker/.claude/plugins \
+RUN mkdir -p /home/worker/.claude/plugins /home/worker/.npm \
  && git clone --depth=1 https://github.com/obra/superpowers.git /home/worker/.claude/plugins/superpowers \
  && chown -R worker:worker /home/worker
 USER worker
