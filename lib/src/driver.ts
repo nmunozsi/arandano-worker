@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import yaml from 'yaml';
 import { readTask } from './readTask.js';
 import { git, commitSubjects, createBranch, currentBranch } from './git.js';
@@ -18,6 +18,41 @@ const env = (k: string) => {
   if (!v) throw new Error(`missing env: ${k}`);
   return v;
 };
+
+export async function parseCliEvents(eventsPath: string): Promise<number> {
+  try {
+    const txt = await readFile(eventsPath, 'utf8');
+    const events = txt
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l) as { type: string };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean) as { type: string }[];
+    return events.filter((e) => e.type === 'tool_use').length;
+  } catch {
+    return 0;
+  }
+}
+
+export async function countBranchCommits(workspace: string, baseBranch: string): Promise<number> {
+  try {
+    const { runShell } = await import('./gates/_shell.js');
+    const r = await runShell({
+      cmd: 'git',
+      args: ['log', '--oneline', `${baseBranch}..HEAD`],
+      cwd: workspace,
+    });
+    return r.output.trim() === '' ? 0 : r.output.trim().split('\n').filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
 
 export async function main(): Promise<number> {
   const workspace = process.cwd();
@@ -100,7 +135,7 @@ export async function main(): Promise<number> {
   stopInstall();
   log(`install exit=${install.exitCode}`);
   if (!install.passed) {
-    return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure', perf, stack });
+    return await fail({ workspace, runFolder, taskId, branch, journal, startedAt, reason: 'install_failure', perf, stack, baseBranch });
   }
 
   const prompt = [
@@ -111,14 +146,30 @@ export async function main(): Promise<number> {
     `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits skill format.`,
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
+  const eventsPath = join(workspace, '.arandano', 'runs', runFolder, 'cli-events.jsonl');
   const stopCli = perf.start('cli');
-  const cliRun = await invokeCli({
+  let cliRun = await invokeCli({
     cli,
-    args: ['--print', '--dangerously-skip-permissions', '--model', model],
+    args: ['--print', '--dangerously-skip-permissions', '--model', model, '--output-format', 'stream-json'],
     prompt,
     cwd: workspace,
     env: process.env,
+    eventsPath,
   });
+  // Fallback: if the CLI doesn't support --output-format stream-json, retry without it
+  if (
+    cliRun.exitCode === 1 &&
+    (cliRun.output.includes('unknown flag') || cliRun.output.includes('unrecognized'))
+  ) {
+    log('[warn] stream-json unavailable, retrying without --output-format');
+    cliRun = await invokeCli({
+      cli,
+      args: ['--print', '--dangerously-skip-permissions', '--model', model],
+      prompt,
+      cwd: workspace,
+      env: process.env,
+    });
+  }
   stopCli();
   log(`cli exit=${cliRun.exitCode}`);
   if (cliRun.output) log(cliRun.output.slice(0, 2000));
@@ -133,6 +184,8 @@ export async function main(): Promise<number> {
       reason: 'cli_failure',
       perf,
       stack,
+      eventsPath,
+      baseBranch,
     });
   }
 
@@ -151,6 +204,8 @@ export async function main(): Promise<number> {
         reason: 'tdd_violation',
         perf,
         stack,
+        eventsPath,
+        baseBranch,
       });
     }
   }
@@ -225,6 +280,8 @@ export async function main(): Promise<number> {
       gates,
       perf,
       stack,
+      eventsPath,
+      baseBranch,
     });
   }
 
@@ -257,11 +314,24 @@ export async function main(): Promise<number> {
     join(workspace, '.arandano', 'runs', runFolder, 'journal.md'),
     journal.join('\n'),
   );
-  await perf.writeTimingsJson(join(workspace, '.arandano', 'runs', runFolder, 'timings.json'), {
+  const timingsPath = join(workspace, '.arandano', 'runs', runFolder, 'timings.json');
+  await perf.writeTimingsJson(timingsPath, {
     taskId,
     side: 'worker',
     stack,
   });
+
+  const cliToolCalls = await parseCliEvents(eventsPath);
+  const cliCommits = await countBranchCommits(workspace, baseBranch);
+  await readFile(timingsPath, 'utf8')
+    .then((raw) => {
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      parsed['cli_tool_calls'] = cliToolCalls;
+      parsed['cli_commits'] = cliCommits;
+      return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
+    })
+    .catch(() => {});
+
   return pr.passed ? 0 : 1;
 }
 
@@ -276,14 +346,32 @@ async function fail(opts: {
   gates?: Awaited<ReturnType<typeof runGates>>;
   perf?: PerfRecorder;
   stack?: string;
+  eventsPath?: string;
+  baseBranch?: string;
 }): Promise<number> {
   if (opts.perf) {
+    const timingsPath = join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'timings.json');
     await opts.perf.writeTimingsJson(
-      join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'timings.json'),
+      timingsPath,
       { taskId: opts.taskId, side: 'worker', stack: opts.stack },
     ).catch((e: unknown) => {
       console.warn('perf: failed to write timings.json:', e);
     });
+
+    // Best-effort: patch timings.json with cli event counts
+    if (opts.eventsPath || opts.baseBranch) {
+      const cliToolCalls = opts.eventsPath ? await parseCliEvents(opts.eventsPath) : 0;
+      const cliCommits =
+        opts.baseBranch ? await countBranchCommits(opts.workspace, opts.baseBranch) : 0;
+      readFile(timingsPath, 'utf8')
+        .then((raw) => {
+          const parsed = JSON.parse(raw) as Record<string, unknown>;
+          parsed['cli_tool_calls'] = cliToolCalls;
+          parsed['cli_commits'] = cliCommits;
+          return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
+        })
+        .catch(() => {});
+    }
   }
   await writeResult(join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'result.json'), {
     task_id: opts.taskId,
