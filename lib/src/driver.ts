@@ -62,6 +62,7 @@ export async function countBranchCommits(workspace: string, baseBranch: string):
       args: ['log', '--oneline', `${baseBranch}..HEAD`],
       cwd: workspace,
     });
+    if (!r.passed) return 0;
     return r.output.trim() === '' ? 0 : r.output.trim().split('\n').filter(Boolean).length;
   } catch {
     return 0;

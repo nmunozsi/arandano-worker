@@ -26,5 +26,8 @@ export async function runShell(opts: {
         durationMs: Date.now() - started,
       });
     });
+    proc.on('error', (err) => {
+      resolve({ passed: false, exitCode: 1, output: String(err), durationMs: Date.now() - started });
+    });
   });
 }
