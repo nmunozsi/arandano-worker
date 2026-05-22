@@ -169,7 +169,7 @@ export async function main(): Promise<number> {
   const stopCli = perf.start('cli');
   let cliRun = await invokeCli({
     cli,
-    args: ['--print', '--dangerously-skip-permissions', '--model', model, '--output-format', 'stream-json'],
+    args: ['--print', '--verbose', '--dangerously-skip-permissions', '--model', model, '--output-format', 'stream-json'],
     prompt,
     cwd: workspace,
     env: process.env,
