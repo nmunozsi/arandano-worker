@@ -192,9 +192,10 @@ export async function main(): Promise<number> {
   log(`cli exit=${cliRun.exitCode}`);
   if (cliRun.output) log(cliRun.output.slice(0, 2000));
 
-  const cliBudgetMs = process.env['ARANDANO_CLI_BUDGET_MS']
+  const _cliBudgetRaw = process.env['ARANDANO_CLI_BUDGET_MS']
     ? Number(process.env['ARANDANO_CLI_BUDGET_MS'])
     : undefined;
+  const cliBudgetMs = _cliBudgetRaw !== undefined && !isNaN(_cliBudgetRaw) ? _cliBudgetRaw : undefined;
   const actualCliMs = perf.asObject()['cli'] ?? 0;
   const cliBudgetExceeded = cliBudgetMs !== undefined && actualCliMs > cliBudgetMs;
   if (cliBudgetExceeded) {
