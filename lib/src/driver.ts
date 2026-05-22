@@ -237,8 +237,7 @@ export async function main(): Promise<number> {
     branch,
     title: `[${task.id}] ${task.title}`,
     bodyPath,
-  });
-  stopPush();
+  }).finally(() => stopPush());
   log(`pr: ${pr.url ?? '<none>'} passed=${pr.passed}`);
   if (!pr.passed && pr.output) log(`pr error: ${pr.output.slice(0, 1000)}`);
 
@@ -282,7 +281,9 @@ async function fail(opts: {
     await opts.perf.writeTimingsJson(
       join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'timings.json'),
       { taskId: opts.taskId, side: 'worker', stack: opts.stack },
-    );
+    ).catch((e: unknown) => {
+      console.warn('perf: failed to write timings.json:', e);
+    });
   }
   await writeResult(join(opts.workspace, '.arandano', 'runs', opts.runFolder, 'result.json'), {
     task_id: opts.taskId,
