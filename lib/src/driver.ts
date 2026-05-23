@@ -202,9 +202,13 @@ export async function main(): Promise<number> {
   const cfgRaw = await readFile(join(workspace, '.arandano', 'config.yaml'), 'utf8').catch(
     () => 'project:\n  stack: node-ts\n',
   );
-  const cfg = yaml.parse(cfgRaw) as { project?: { stack?: string; default_branch?: string } };
+  const cfg = yaml.parse(cfgRaw) as {
+    project?: { stack?: string; default_branch?: string };
+    gates?: { parallel?: boolean };
+  };
   const stack = cfg.project?.stack ?? 'node-ts';
   const defaultBranch = cfg.project?.default_branch ?? 'main';
+  const gatesParallel = cfg.gates?.parallel ?? true;
 
   // checkout phase: reset to base branch, load stack gates, read task, create agent branch
   const stopCheckout = perf.start('checkout');
@@ -338,6 +342,7 @@ export async function main(): Promise<number> {
   }
 
   const gates = await runGates({
+    parallel: gatesParallel,
     order: ['format', 'lint', 'typecheck', 'test', 'coverage', 'security', 'commitMsg'],
     gates: {
       format: {
@@ -464,6 +469,8 @@ export async function main(): Promise<number> {
       parsed['cli_cache_read_tokens'] = cliTokens.cache_read_input_tokens;
       parsed['cli_cache_creation_tokens'] = cliTokens.cache_creation_input_tokens;
       parsed['cli_tool_timings'] = cliToolTimings;
+      parsed['gates_parallel_ms'] = gates.gates_parallel_ms;
+      parsed['gates_serial_sum_ms'] = gates.gates_serial_sum_ms;
       return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
     })
     .catch(() => {});
@@ -513,6 +520,10 @@ async function fail(opts: {
           parsed['cli_cache_read_tokens'] = cliTokens.cache_read_input_tokens;
           parsed['cli_cache_creation_tokens'] = cliTokens.cache_creation_input_tokens;
           parsed['cli_tool_timings'] = cliToolTimings;
+          if (opts.gates) {
+            parsed['gates_parallel_ms'] = opts.gates.gates_parallel_ms;
+            parsed['gates_serial_sum_ms'] = opts.gates.gates_serial_sum_ms;
+          }
           return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
         })
         .catch(() => {});
