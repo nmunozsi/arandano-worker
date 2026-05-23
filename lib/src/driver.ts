@@ -262,11 +262,36 @@ export async function main(): Promise<number> {
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
   const prompt = contextBlock + promptBody;
+  const disallowed = [
+    'AskUserQuestion',
+    'CronCreate',
+    'CronDelete',
+    'CronList',
+    'EnterPlanMode',
+    'ExitPlanMode',
+    'EnterWorktree',
+    'ExitWorktree',
+    'Monitor',
+    'NotebookEdit',
+    'PushNotification',
+    'ScheduleWakeup',
+    'ToolSearch',
+    'WebFetch',
+    'WebSearch',
+  ].join(',');
+
   const eventsPath = join(workspace, '.arandano', 'runs', runFolder, 'cli-events.jsonl');
   const stopCli = perf.start('cli');
   let cliRun = await invokeCli({
     cli,
-    args: ['--print', '--verbose', '--dangerously-skip-permissions', '--model', model, '--output-format', 'stream-json'],
+    args: [
+      '--print',
+      '--verbose',
+      '--dangerously-skip-permissions',
+      '--model', model,
+      '--output-format', 'stream-json',
+      '--disallowed-tools', disallowed,
+    ],
     prompt,
     cwd: workspace,
     env: process.env,
@@ -280,7 +305,7 @@ export async function main(): Promise<number> {
     log('[warn] stream-json unavailable, retrying without --output-format');
     cliRun = await invokeCli({
       cli,
-      args: ['--print', '--dangerously-skip-permissions', '--model', model],
+      args: ['--print', '--dangerously-skip-permissions', '--model', model, '--disallowed-tools', disallowed],
       prompt,
       cwd: workspace,
       env: process.env,
