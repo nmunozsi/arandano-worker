@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseCliEvents, parseCliTokens, parseCliToolTimings, countBranchCommits, buildContextBlock } from '../driver.js';
+import { parseCliEvents, parseCliTokens, parseCliToolTimings, countBranchCommits, buildContextBlock, buildInlinedContent } from '../driver.js';
 
 describe('parseCliEvents (envelope + nested tool_use)', () => {
   it('counts tool_use events nested inside assistant.message.content', async () => {
@@ -256,5 +256,43 @@ describe('countBranchCommits', () => {
     expect(typeof result).toBe('number');
     expect(Number.isNaN(result)).toBe(false);
     expect(result).toBe(0);
+  });
+});
+
+describe('buildInlinedContent', () => {
+  it('inlines role, CONTEXT, coding-standards, and gitmoji SKILL content', async () => {
+    const dir = join(tmpdir(), `test-inlined-${Date.now()}`);
+    await mkdir(join(dir, '.arandano/roles'), { recursive: true });
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await mkdir(join(dir, 'planning/memory'), { recursive: true });
+    await writeFile(join(dir, '.arandano/roles/coder.md'), 'ROLE_CODER', 'utf8');
+    await writeFile(join(dir, 'src/CONTEXT.md'), 'CTX', 'utf8');
+    await writeFile(join(dir, 'planning/memory/coding-standards.md'), 'STD', 'utf8');
+
+    const skillDir = join(tmpdir(), `skill-${Date.now()}`);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), 'GITMOJI', 'utf8');
+
+    const out = await buildInlinedContent(dir, 'coder', join(skillDir, 'SKILL.md'));
+    expect(out).toContain('ROLE_CODER');
+    expect(out).toContain('CTX');
+    expect(out).toContain('STD');
+    expect(out).toContain('GITMOJI');
+    expect(out).toContain('<inlined>');
+    expect(out).toContain('</inlined>');
+  });
+
+  it('caps total content at 8KB and adds truncation marker', async () => {
+    const dir = join(tmpdir(), `test-inlined-cap-${Date.now()}`);
+    await mkdir(join(dir, '.arandano/roles'), { recursive: true });
+    await writeFile(join(dir, '.arandano/roles/coder.md'), 'X'.repeat(10000), 'utf8');
+    const out = await buildInlinedContent(dir, 'coder', '/nonexistent');
+    expect(out.length).toBeLessThanOrEqual(8 * 1024 + 256);
+    expect(out).toContain('[truncated');
+  });
+
+  it('silently skips missing files and returns empty string when all missing', async () => {
+    const out = await buildInlinedContent('/nonexistent/dir', 'coder', '/nonexistent/SKILL.md');
+    expect(out).toBe('');
   });
 });

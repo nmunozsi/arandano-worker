@@ -28,6 +28,53 @@ export async function buildContextBlock(workdir: string, paths: string[]): Promi
     : '';
 }
 
+const INLINE_CAP_BYTES = 8 * 1024;
+
+export async function buildInlinedContent(
+  workdir: string,
+  role: string,
+  gitmojiSkillPath: string,
+): Promise<string> {
+  const candidates: Array<{ label: string; absPath: string }> = [
+    {
+      label: `.arandano/roles/${role}.md`,
+      absPath: join(workdir, '.arandano', 'roles', `${role}.md`),
+    },
+    { label: 'src/CONTEXT.md', absPath: join(workdir, 'src', 'CONTEXT.md') },
+    {
+      label: 'planning/memory/coding-standards.md',
+      absPath: join(workdir, 'planning', 'memory', 'coding-standards.md'),
+    },
+    { label: 'gitmoji-commits SKILL.md', absPath: gitmojiSkillPath },
+  ];
+
+  const blocks: string[] = [];
+  let used = 0;
+  for (const { label, absPath } of candidates) {
+    try {
+      const content = await readFile(absPath, 'utf8');
+      const header = `\`\`\`${label}\n`;
+      const footer = `\n\`\`\``;
+      const overhead = Buffer.byteLength(header + footer, 'utf8');
+      const remaining = INLINE_CAP_BYTES - used - overhead;
+      if (remaining <= 0) {
+        blocks.push(`[truncated: budget exhausted before ${label}]`);
+        break;
+      }
+      const trimmed =
+        Buffer.byteLength(content, 'utf8') > remaining
+          ? content.slice(0, remaining) + `\n[truncated, see ${label} for full]`
+          : content;
+      blocks.push(header + trimmed + footer);
+      used += Buffer.byteLength(blocks[blocks.length - 1]!, 'utf8');
+    } catch {
+      // file missing — skip silently
+    }
+  }
+  if (blocks.length === 0) return '';
+  return `<inlined>\n${blocks.join('\n\n')}\n</inlined>\n\n`;
+}
+
 const env = (k: string) => {
   const v = process.env[k];
   if (!v) throw new Error(`missing env: ${k}`);
@@ -252,16 +299,20 @@ export async function main(): Promise<number> {
 
   const injectPaths = (process.env['ARANDANO_INJECT_CONTEXT'] ?? '').split(':').filter(Boolean);
   const contextBlock = await buildContextBlock(workspace, injectPaths);
+  const inlinedBlock = await buildInlinedContent(
+    workspace,
+    task.role,
+    '/opt/arandano/skills/gitmoji-commits/SKILL.md',
+  );
 
   const promptBody = [
     `You are running as the ${task.role} role.`,
-    `Read .arandano/roles/${task.role}.md, src/CONTEXT.md, planning/memory/coding-standards.md.`,
-    `Read the SKILL.md at /opt/arandano/skills/gitmoji-commits/SKILL.md and follow its commit format on every commit you produce.`,
+    `Project standards, role description, and gitmoji commit format are inlined above (see <inlined>...</inlined>).`,
     `Task file: ${task.filePath}.`,
-    `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits skill format.`,
+    `Use TDD (${tdd}). Every commit MUST follow the gitmoji-commits format already inlined.`,
     `Do not push or open the PR yourself — the worker will after gates pass.`,
   ].join('\n');
-  const prompt = contextBlock + promptBody;
+  const prompt = inlinedBlock + contextBlock + promptBody;
   const disallowed = [
     'AskUserQuestion',
     'CronCreate',
