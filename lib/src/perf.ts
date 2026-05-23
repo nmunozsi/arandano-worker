@@ -13,6 +13,16 @@ export interface TimingsFile {
   host?: Record<string, number>;
   worker?: Record<string, number>;
   total_ms: number;
+  cli_tool_calls?: number;
+  cli_commits?: number;
+  cli_budget_exceeded?: boolean;
+  cli_input_tokens?: number;
+  cli_output_tokens?: number;
+  cli_cache_read_tokens?: number;
+  cli_cache_creation_tokens?: number;
+  cli_tool_timings?: Record<string, { count: number; total_ms: number }>;
+  gates_parallel_ms?: number;
+  gates_serial_sum_ms?: number;
 }
 
 export class PerfRecorder {

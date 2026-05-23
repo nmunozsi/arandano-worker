@@ -37,21 +37,114 @@ const env = (k: string) => {
 export async function parseCliEvents(eventsPath: string): Promise<number> {
   try {
     const txt = await readFile(eventsPath, 'utf8');
-    const events = txt
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map((l) => {
-        try {
-          return JSON.parse(l) as { type: string };
-        } catch {
-          return null;
+    let n = 0;
+    for (const line of txt.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const env = JSON.parse(line) as {
+          e?: { type?: string; message?: { content?: { type?: string }[] } };
+        };
+        const e = env.e;
+        if (!e) continue;
+        if (e.type === 'assistant' && Array.isArray(e.message?.content)) {
+          for (const c of e.message!.content!) {
+            if (c.type === 'tool_use') n++;
+          }
         }
-      })
-      .filter(Boolean) as { type: string }[];
-    return events.filter((e) => e.type === 'tool_use').length;
+      } catch {
+        // skip malformed
+      }
+    }
+    return n;
   } catch {
     return 0;
+  }
+}
+
+export interface CliTokens {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+export async function parseCliTokens(eventsPath: string): Promise<CliTokens> {
+  const zero: CliTokens = {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_read_input_tokens: 0,
+    cache_creation_input_tokens: 0,
+  };
+  try {
+    const txt = await readFile(eventsPath, 'utf8');
+    let last: CliTokens = zero;
+    for (const line of txt.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const env = JSON.parse(line) as { e?: { type?: string; usage?: Partial<CliTokens> } };
+        const e = env.e;
+        if (e?.type === 'result' && e.usage) {
+          last = {
+            input_tokens: e.usage.input_tokens ?? 0,
+            output_tokens: e.usage.output_tokens ?? 0,
+            cache_read_input_tokens: e.usage.cache_read_input_tokens ?? 0,
+            cache_creation_input_tokens: e.usage.cache_creation_input_tokens ?? 0,
+          };
+        }
+      } catch {
+        // skip
+      }
+    }
+    return last;
+  } catch {
+    return zero;
+  }
+}
+
+export interface ToolTiming {
+  count: number;
+  total_ms: number;
+}
+
+export async function parseCliToolTimings(eventsPath: string): Promise<Record<string, ToolTiming>> {
+  const out: Record<string, ToolTiming> = {};
+  try {
+    const txt = await readFile(eventsPath, 'utf8');
+    const pending = new Map<string, { name: string; ts: number }>();
+    for (const line of txt.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const env = JSON.parse(line) as {
+          ts?: number;
+          e?: {
+            type?: string;
+            message?: {
+              content?: Array<{ type?: string; id?: string; name?: string; tool_use_id?: string }>;
+            };
+          };
+        };
+        const ts = env.ts ?? 0;
+        const content = env.e?.message?.content ?? [];
+        for (const c of content) {
+          if (c.type === 'tool_use' && c.id) {
+            pending.set(c.id, { name: c.name ?? 'unknown', ts });
+          } else if (c.type === 'tool_result' && c.tool_use_id) {
+            const p = pending.get(c.tool_use_id);
+            if (p) {
+              const slot = (out[p.name] ??= { count: 0, total_ms: 0 });
+              slot.count++;
+              slot.total_ms += Math.max(0, ts - p.ts);
+              pending.delete(c.tool_use_id);
+            }
+          }
+        }
+      } catch {
+        // skip
+      }
+    }
+    return out;
+  } catch {
+    return out;
   }
 }
 
@@ -357,6 +450,8 @@ export async function main(): Promise<number> {
   });
 
   const cliToolCalls = await parseCliEvents(eventsPath);
+  const cliTokens = await parseCliTokens(eventsPath);
+  const cliToolTimings = await parseCliToolTimings(eventsPath);
   const cliCommits = await countBranchCommits(workspace, baseBranch);
   await readFile(timingsPath, 'utf8')
     .then((raw) => {
@@ -364,6 +459,11 @@ export async function main(): Promise<number> {
       parsed['cli_tool_calls'] = cliToolCalls;
       parsed['cli_commits'] = cliCommits;
       parsed['cli_budget_exceeded'] = cliBudgetExceeded;
+      parsed['cli_input_tokens'] = cliTokens.input_tokens;
+      parsed['cli_output_tokens'] = cliTokens.output_tokens;
+      parsed['cli_cache_read_tokens'] = cliTokens.cache_read_input_tokens;
+      parsed['cli_cache_creation_tokens'] = cliTokens.cache_creation_input_tokens;
+      parsed['cli_tool_timings'] = cliToolTimings;
       return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
     })
     .catch(() => {});
@@ -398,6 +498,8 @@ async function fail(opts: {
     // Best-effort: patch timings.json with cli event counts and budget flag
     if (opts.eventsPath || opts.baseBranch || opts.cliBudgetExceeded !== undefined) {
       const cliToolCalls = opts.eventsPath ? await parseCliEvents(opts.eventsPath) : 0;
+      const cliTokens = opts.eventsPath ? await parseCliTokens(opts.eventsPath) : { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+      const cliToolTimings = opts.eventsPath ? await parseCliToolTimings(opts.eventsPath) : {};
       const cliCommits =
         opts.baseBranch ? await countBranchCommits(opts.workspace, opts.baseBranch) : 0;
       await readFile(timingsPath, 'utf8')
@@ -406,6 +508,11 @@ async function fail(opts: {
           parsed['cli_tool_calls'] = cliToolCalls;
           parsed['cli_commits'] = cliCommits;
           parsed['cli_budget_exceeded'] = opts.cliBudgetExceeded ?? false;
+          parsed['cli_input_tokens'] = cliTokens.input_tokens;
+          parsed['cli_output_tokens'] = cliTokens.output_tokens;
+          parsed['cli_cache_read_tokens'] = cliTokens.cache_read_input_tokens;
+          parsed['cli_cache_creation_tokens'] = cliTokens.cache_creation_input_tokens;
+          parsed['cli_tool_timings'] = cliToolTimings;
           return writeFile(timingsPath, JSON.stringify(parsed, null, 2), 'utf8');
         })
         .catch(() => {});

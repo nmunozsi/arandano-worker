@@ -1,8 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { invokeCli } from '../invokeClaudeCode.js';
+
+describe('event envelope', () => {
+  it('events file lines are JSON {ts:number, e:object}', async () => {
+    const dir = join(tmpdir(), `test-envelope-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const eventsPath = join(dir, 'cli-events.jsonl');
+    await writeFile(
+      eventsPath,
+      [
+        JSON.stringify({ ts: 100, e: { type: 'system', subtype: 'init' } }),
+        JSON.stringify({
+          ts: 200,
+          e: {
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Read' }] },
+          },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+    const raw = await readFile(eventsPath, 'utf8');
+    expect(raw.split('\n').every((l) => !l || JSON.parse(l).e !== undefined)).toBe(true);
+  });
+});
 
 describe('invokeCli', () => {
   it('passes the prompt via stdin and returns exit code', async () => {

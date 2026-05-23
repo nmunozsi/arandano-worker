@@ -2,53 +2,156 @@ import { describe, it, expect } from 'vitest';
 import { writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseCliEvents, countBranchCommits, buildContextBlock } from '../driver.js';
+import { parseCliEvents, parseCliTokens, parseCliToolTimings, countBranchCommits, buildContextBlock } from '../driver.js';
 
-describe('parseCliEvents', () => {
-  it('counts tool_use events in a valid jsonl file', async () => {
+describe('parseCliEvents (envelope + nested tool_use)', () => {
+  it('counts tool_use events nested inside assistant.message.content', async () => {
     const dir = join(tmpdir(), `test-events-${Date.now()}`);
     await mkdir(dir, { recursive: true });
     const eventsPath = join(dir, 'cli-events.jsonl');
     await writeFile(
       eventsPath,
       [
-        JSON.stringify({ type: 'system', subtype: 'init' }),
-        JSON.stringify({ type: 'tool_use', name: 'Read', input: {} }),
-        JSON.stringify({ type: 'tool_result', content: '' }),
-        JSON.stringify({ type: 'tool_use', name: 'Edit', input: {} }),
-        JSON.stringify({ type: 'result', subtype: 'success', result: 'done' }),
+        JSON.stringify({ ts: 0, e: { type: 'system', subtype: 'init' } }),
+        JSON.stringify({
+          ts: 100,
+          e: {
+            type: 'assistant',
+            message: {
+              content: [
+                { type: 'thinking', thinking: '…' },
+                { type: 'tool_use', id: 'tu_1', name: 'Read' },
+              ],
+            },
+          },
+        }),
+        JSON.stringify({
+          ts: 200,
+          e: {
+            type: 'user',
+            message: { content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '…' }] },
+          },
+        }),
+        JSON.stringify({
+          ts: 300,
+          e: {
+            type: 'assistant',
+            message: {
+              content: [
+                { type: 'tool_use', id: 'tu_2', name: 'Edit' },
+                { type: 'tool_use', id: 'tu_3', name: 'Bash' },
+              ],
+            },
+          },
+        }),
+        JSON.stringify({ ts: 400, e: { type: 'result', subtype: 'success' } }),
       ].join('\n'),
       'utf8',
     );
-    expect(await parseCliEvents(eventsPath)).toBe(2);
+    expect(await parseCliEvents(eventsPath)).toBe(3);
   });
 
-  it('returns 0 when the file does not exist', async () => {
-    expect(await parseCliEvents('/nonexistent/path/cli-events.jsonl')).toBe(0);
+  it('returns 0 on empty/missing/malformed', async () => {
+    expect(await parseCliEvents('/nonexistent/cli-events.jsonl')).toBe(0);
   });
+});
 
-  it('returns 0 when the file is empty', async () => {
-    const dir = join(tmpdir(), `test-events-empty-${Date.now()}`);
-    await mkdir(dir, { recursive: true });
-    const eventsPath = join(dir, 'cli-events.jsonl');
-    await writeFile(eventsPath, '', 'utf8');
-    expect(await parseCliEvents(eventsPath)).toBe(0);
-  });
-
-  it('skips malformed json lines gracefully', async () => {
-    const dir = join(tmpdir(), `test-events-bad-${Date.now()}`);
+describe('parseCliTokens', () => {
+  it('extracts usage from final result event', async () => {
+    const dir = join(tmpdir(), `test-tokens-${Date.now()}`);
     await mkdir(dir, { recursive: true });
     const eventsPath = join(dir, 'cli-events.jsonl');
     await writeFile(
       eventsPath,
       [
-        'not valid json{{{',
-        JSON.stringify({ type: 'tool_use', name: 'Bash', input: {} }),
-        '{"type":',
+        JSON.stringify({ ts: 0, e: { type: 'system' } }),
+        JSON.stringify({
+          ts: 5000,
+          e: {
+            type: 'result',
+            subtype: 'success',
+            usage: {
+              input_tokens: 1500,
+              output_tokens: 320,
+              cache_read_input_tokens: 12000,
+              cache_creation_input_tokens: 200,
+            },
+          },
+        }),
       ].join('\n'),
       'utf8',
     );
-    expect(await parseCliEvents(eventsPath)).toBe(1);
+    const t = await parseCliTokens(eventsPath);
+    expect(t).toEqual({
+      input_tokens: 1500,
+      output_tokens: 320,
+      cache_read_input_tokens: 12000,
+      cache_creation_input_tokens: 200,
+    });
+  });
+
+  it('returns zeros when no result event', async () => {
+    const dir = join(tmpdir(), `test-tokens-empty-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const eventsPath = join(dir, 'cli-events.jsonl');
+    await writeFile(eventsPath, '', 'utf8');
+    expect(await parseCliTokens(eventsPath)).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+  });
+});
+
+describe('parseCliToolTimings', () => {
+  it('correlates tool_use ts with matching tool_result ts and groups by tool name', async () => {
+    const dir = join(tmpdir(), `test-tooltime-${Date.now()}`);
+    await mkdir(dir, { recursive: true });
+    const eventsPath = join(dir, 'cli-events.jsonl');
+    await writeFile(
+      eventsPath,
+      [
+        JSON.stringify({
+          ts: 100,
+          e: {
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', id: 'tu_1', name: 'Read' }] },
+          },
+        }),
+        JSON.stringify({
+          ts: 250,
+          e: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu_1' }] } },
+        }),
+        JSON.stringify({
+          ts: 300,
+          e: {
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', id: 'tu_2', name: 'Read' }] },
+          },
+        }),
+        JSON.stringify({
+          ts: 320,
+          e: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu_2' }] } },
+        }),
+        JSON.stringify({
+          ts: 400,
+          e: {
+            type: 'assistant',
+            message: { content: [{ type: 'tool_use', id: 'tu_3', name: 'Bash' }] },
+          },
+        }),
+        JSON.stringify({
+          ts: 900,
+          e: { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tu_3' }] } },
+        }),
+      ].join('\n'),
+      'utf8',
+    );
+    expect(await parseCliToolTimings(eventsPath)).toEqual({
+      Read: { count: 2, total_ms: 170 },
+      Bash: { count: 1, total_ms: 500 },
+    });
   });
 });
 
